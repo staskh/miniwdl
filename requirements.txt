@@ -13,3 +13,4 @@ python-json-logger~=2.0
 lark~=1.1
 bullet~=2.2
 psutil>=5.8.0
+boto3>=1.24.0
