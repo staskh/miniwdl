@@ -32,6 +32,7 @@ from typing import (
 from abc import ABC, abstractmethod
 from .Error import SourcePosition, SourceNode
 from . import Type, Expr, Env, Error, StdLib, _parser, _util
+import boto3
 
 
 class StructTypeDef(SourceNode):
@@ -1509,7 +1510,6 @@ async def read_source_default(
 
 
 #####----------------------------------------
-import boto3
 
 
 def read_source_s3(abspath: str) -> ReadSourceResult:
