@@ -41,6 +41,7 @@ ci_housekeeping: sopretty check_check check doc
 ci_unit_tests: unit_tests
 
 check:
+	pyre --version
 	pyre \
 		--search-path stubs \
 		--typeshed `python3 -c 'import sys, site, os; print(next(p for p in (os.path.join(dir,"lib/pyre_check/typeshed") for dir in (sys.prefix,site.getuserbase())) if os.path.isdir(p)))'` \
