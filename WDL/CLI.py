@@ -297,7 +297,7 @@ def outline(
     def descend(dobj=None, first_descent=first_descent):
         # show lint for the node just prior to first descent beneath it
         if not first_descent and hasattr(obj, "lint"):
-            for (pos, cls, msg, suppressed) in sorted(obj.lint, key=lambda t: t[0]):
+            for pos, cls, msg, suppressed in sorted(obj.lint, key=lambda t: t[0]):
                 if not (suppress and str(cls) in suppress) and (show_all or not suppressed):
                     print(
                         f"{s}    (Ln {pos.line}, Col {pos.column}) {cls}{' (suppressed)' if suppressed else ''}, {msg}",
@@ -1377,6 +1377,7 @@ def run_self_test(**kwargs):
                 }
                 output {
                     Array[String] messages = select_all(msg)
+                    Array[File] message_files = select_all(hello.message)
                 }
             }
             task hello {
@@ -1385,11 +1386,13 @@ def run_self_test(**kwargs):
                 }
                 command {
                     if grep -qv ^\# "${who}" ; then
-                        echo "Hello, $(cat ${who})!" | tee message.txt 1>&2
+                        name="$(cat ${who})"
+                        mkdir messages
+                        echo "Hello, $name!" | tee "messages/$name.txt" 1>&2
                     fi
                 }
                 output {
-                    File? message = "message.txt"
+                    File? message = select_first(flatten([glob("messages/*.txt"), ["nonexistent"]]))
                 }
                 runtime {
                     docker: "ubuntu:18.04"

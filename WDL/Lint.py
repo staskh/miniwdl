@@ -33,6 +33,7 @@ import os
 import random
 import shutil
 from typing import Any, Optional, Union
+import regex
 from . import Error, Type, Env, Expr, Tree, StdLib, Walker, _util
 
 
@@ -781,6 +782,8 @@ class UnusedDeclaration(Linter):
             #    command
             # 2. dxWDL "native" task stubs, which declare inputs but leave
             #    command empty.
+            # 3. task declaration has "env" decorator and the command uses it
+            #    as an environment variable
             index_suffixes = [
                 "index",
                 "indexes",
@@ -808,8 +811,28 @@ class UnusedDeclaration(Linter):
                     and pt.meta.get("type") == "native"
                     and pt.meta.get("id")
                 )
+                or self._used_as_command_env_var(obj)
             ):
                 self.add(obj, "nothing references {} {}".format(str(obj.type), obj.name))
+
+    def _used_as_command_env_var(self, decl: Tree.Decl) -> bool:
+        # Task input declarations with the "env" modifier are intended to be
+        # used as environment variables in the task command. False-positive
+        # UnusedDeclaration warnings might result because such references are
+        # not modeled in our WDL syntax tree.
+        # Avoid this by searching for apparent usage of the environment
+        # variable in string literal parts of the task command script. This
+        # isn't a perfect heuristic (e.g. it could be single-quoted within the
+        # script), but that's OK for lint warning purposes.
+        task = getattr(decl, "parent")
+        if not (isinstance(task, Tree.Task) and decl.decor.get("env", False)):
+            return False
+        pat = regex.compile(r"\$\{?" + decl.name + r"([^0-9A-Za-z_]|$)")
+        for part in task.command.parts:
+            if isinstance(part, str):
+                if pat.search(part):
+                    return True
+        return False
 
 
 @a_linter
@@ -939,12 +962,22 @@ class CommandShellCheck(Linter):
                 )
 
         if shellcheck_items:
+            env_decls = set(
+                decl.name
+                for decl in ((obj.inputs or []) + obj.postinputs)
+                if decl.decor.get("env", False)
+            )
             try:
                 shellcheck_items = json.loads(shellcheck_items)
                 assert isinstance(shellcheck_items, list)
 
                 # annotate on tree, adding appropriate offsets to line/column positions
                 for item in shellcheck_items:
+                    if item["code"] == 2154 and item["message"].split(" ")[0] in env_decls:
+                        # Suppress SC2154 "var is referenced but not assigned" specifically when
+                        # var corresponds to a declaration with the "env" modifier. ShellCheck
+                        # doesn't know that command expects this var to be set in its environment.
+                        continue
                     line = obj.command.pos.line + item["line"] - 1
                     column = col_offset + item["column"] - 1
                     self.add(
@@ -1027,7 +1060,6 @@ class SelectArray(Linter):
 
 @a_linter
 class UnknownRuntimeKey(Linter):
-
     # refs:
     # https://cromwell.readthedocs.io/en/develop/RuntimeAttributes/
     # https://github.com/broadinstitute/cromwell/blob/develop/wom/src/main/scala/wom/RuntimeAttributes.scala
@@ -1183,85 +1215,3 @@ class Deprecated(Linter):
             and _find_doc(obj).effective_wdl_version not in ("draft-2", "1.0")
         ):
             self.add(obj, "replace 'object' with specific struct type [WDL >= 1.1]", obj.pos)
-
-        # The remainder of this class body deals with issue 596, future tightening of typechecking
-        # implicit coercions from optional non-String expressions where non-optional String is
-        # expected
-
-        if isinstance(obj, Expr.Apply):
-            if obj.function_name == "_add":
-                assert len(obj.arguments) == 2
-                arg0ty = obj.arguments[0].type
-                arg1ty = obj.arguments[1].type
-                if (isinstance(arg0ty, Type.String) or isinstance(arg1ty, Type.String)) and (
-                    _issue596_coercion(Type.String(), arg0ty)
-                    or _issue596_coercion(Type.String(), arg1ty)
-                ):
-                    self.add(
-                        obj,
-                        "future miniwdl version will disallow optional "
-                        + str(arg0ty if isinstance(arg1ty, Type.String) else arg1ty)
-                        + " operand in string concatenation; use select_first() coercion",
-                        obj.pos,
-                    )
-            else:
-                F = getattr(
-                    StdLib.TaskOutputs(_find_doc(obj).effective_wdl_version), obj.function_name
-                )
-                if isinstance(F, StdLib.StaticFunction):
-                    for i in range(min(len(F.argument_types), len(obj.arguments))):
-                        F_i = F.argument_types[i]
-                        arg_i = obj.arguments[i].type
-                        if _issue596_coercion(F_i, arg_i):
-                            msg = (
-                                f"future miniwdl version will disallow optional {arg_i}"
-                                f" for non-optional String argument of {obj.function_name}()"
-                                + "; use select_first() coercion"
-                            )
-                            self.add(obj, msg, obj.arguments[i].pos)
-
-        if (
-            isinstance(obj, Expr.Struct)
-            and isinstance(obj.type, Type.StructInstance)
-            and obj.type.members
-        ):
-            for field, field_expr in obj.members.items():
-                if _issue596_coercion(obj.type.members[field], field_expr.type):
-                    msg = (
-                        f"future miniwdl version will disallow optional expression within {field_expr.type} for"
-                        f" non-optional String within member {obj.type.members[field]} {field}"
-                        "; use select_first() or select_all() coercion"
-                    )
-                    self.add(obj, msg, field_expr.pos)
-
-    def decl(self, obj: Tree.Decl) -> Any:
-        if obj.expr and _issue596_coercion(obj.type, obj.expr.type):
-            self.add(
-                obj,
-                f"future miniwdl version will disallow optional expression within {obj.expr.type} for non-optional"
-                f" String within {obj.expr.type} {obj.name}; use select_first() or select_all() coercion",
-            )
-
-    def call(self, obj: Tree.Call) -> Any:
-        for name, inp_expr in obj.inputs.items():
-            decl = _find_input_decl(obj, name)
-            # treat input with default as optional, with or without the ? type quantifier
-            decltype = decl.type.copy(optional=True) if decl.expr else decl.type
-            if _issue596_coercion(decltype, inp_expr.type):
-                self.add(
-                    obj,
-                    f"future miniwdl version will disallow optional expression within {inp_expr.type} for non-optional"
-                    f" String within input {decltype} {decl.name}; use select_first() or select_all() coercion",
-                )
-
-
-def _issue596_coercion(to_type, from_type):
-    return _compound_coercion(
-        to_type,
-        from_type,
-        Type.String,
-        predicates=lambda to_type2, from_type2: isinstance(to_type2, Type.String)
-        and not to_type2.optional
-        and not isinstance(from_type2, Type.String)
-        and from_type2.optional,
-    )

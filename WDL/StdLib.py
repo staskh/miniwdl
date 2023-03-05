@@ -294,7 +294,7 @@ class TaskOutputs(Base):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        for (name, argument_types, return_type, F) in [
+        for name, argument_types, return_type, F in [
             ("stdout", [], Type.File(), _notimpl),
             ("stderr", [], Type.File(), _notimpl),
             ("glob", [Type.String()], Type.Array(Type.File()), _notimpl),
@@ -406,7 +406,7 @@ def _serialize_tsv(v: Value.Array, outfile: BinaryIO) -> None:
 
 def _serialize_map(map: Value.Map, outfile: BinaryIO) -> None:
     lines = []
-    for (k, v) in map.value:
+    for k, v in map.value:
         k = k.coerce(Type.String()).value
         v = v.coerce(Type.String()).value
         if "\n" in k or "\t" in k or "\n" in v or "\t" in v:
@@ -579,7 +579,7 @@ class _AddOperator(_ArithmeticOperator):
         if t2 is None:
             # neither operand is a string; defer to _ArithmeticOperator
             return super().infer_type(expr)
-        if not t2.coerces(Type.String(optional=not expr._check_quant)):
+        if not t2.coerces(Type.String(), check_quant=expr._check_quant):
             raise Error.IncompatibleOperand(
                 expr,
                 "Cannot add/concatenate {} and {}".format(

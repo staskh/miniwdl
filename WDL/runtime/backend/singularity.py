@@ -81,7 +81,7 @@ class SingularityContainer(SubprocessBase):
         if logger.isEnabledFor(logging.DEBUG):
             ans.append("--verbose")
         ans += [
-            "run",
+            "exec",
             "--pwd",
             os.path.join(self.container_dir, "work"),
         ]
@@ -112,7 +112,7 @@ class SingularityContainer(SubprocessBase):
                 tmpdir=tempdir,
             )
         )
-        for (container_path, host_path, writable) in mounts:
+        for container_path, host_path, writable in mounts:
             if ":" in (container_path + host_path):
                 raise InputError("Singularity input filenames cannot contain ':'")
             ans.append("--bind")

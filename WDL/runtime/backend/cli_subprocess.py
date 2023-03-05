@@ -1,5 +1,6 @@
 import os
 import time
+import shlex
 import psutil
 import logging
 import threading
@@ -81,15 +82,21 @@ class SubprocessBase(TaskContainer):
                 )
             )
 
-            # prepare command
+            # prepare command & environment
+            # we set the environment variables at the beginning of the command script because:
+            # 1) --env is subject to command line length limitations
+            # 2) --env-file isn't implemented consistently wrt quoting, escaping, etc.
             with open(os.path.join(self.host_dir, "command"), "w") as outfile:
+                for k, v in self.runtime_values.get("env", {}).items():
+                    outfile.write(f"export {k}={shlex.quote(v)}\n")
                 outfile.write(command)
 
             # start subprocess
             invocation = self._run_invocation(logger, cleanup, image) + [
-                "/bin/bash",
+                "/bin/sh",
                 "-c",
-                "bash -l ../command >> ../stdout.txt 2>> ../stderr.txt",
+                self.cfg.get("task_runtime", "command_shell")
+                + " ../command >> ../stdout.txt 2>> ../stderr.txt",
             ]
             proc = subprocess.Popen(
                 invocation, stdout=cli_log, stderr=subprocess.STDOUT, cwd=self.host_dir
@@ -142,7 +149,6 @@ class SubprocessBase(TaskContainer):
         self._bind_input_files = False
 
     def prepare_mounts(self) -> List[Tuple[str, str, bool]]:
-
         mounts = []
         # mount stdout, stderr, and working directory read/write
         self.touch_mount_point(self.host_stdout_txt())
